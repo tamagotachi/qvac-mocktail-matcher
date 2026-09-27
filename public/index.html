@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mocktail Matcher</title>
+<style>
+  :root { --bg: #fff5f7; --ink: #33172a; --muted: #815a70; --line: #f3d3df; --card: #fff; --pink: #d6336c; --teal: #0ca678; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: linear-gradient(180deg, #fff0f6, #e6fcf5); color: var(--ink); font: 16px/1.5 system-ui, "Segoe UI", sans-serif; min-height: 100vh; }
+  main { max-width: 860px; margin: 0 auto; padding: 26px 16px 56px; }
+  h1 { font: 800 38px/1.05 Georgia, serif; margin: 0; } h1 span { color: var(--pink); font-style: italic; } .sub { color: var(--muted); margin: 6px 0 8px; }
+  #status { font-size: 13px; color: var(--muted); margin: 0 0 12px; } #status.ok { color: var(--teal); } #status.err { color: #c92a2a; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 16px 18px; margin-bottom: 16px; } .panel h2 { font-size: 18px; margin: 0 0 8px; }
+  input { font: inherit; padding: 10px 12px; border: 2px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); min-width: 0; } #mood { width: 100%; font-size: 18px; }
+  input:focus-visible, button:focus-visible { outline: 3px solid #faa2c1; outline-offset: 2px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 0; } .chips button { background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 99px; padding: 4px 12px; font-size: 14px; font-weight: 600; }
+  button { font: inherit; font-weight: 700; padding: 10px 18px; border: 0; border-radius: 12px; background: var(--pink); color: #fff; cursor: pointer; }
+  button.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); padding: 6px 12px; font-size: 14px; } button.busy { opacity: .55; cursor: progress; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; } .row > input { flex: 1 1 220px; } .note { color: var(--muted); font-size: 14px; min-height: 20px; margin: 8px 0 0; }
+  .drinks { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+  .drink { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; } .drink.top { border: 2px solid var(--pink); }
+  .drink .e { font-size: 40px; line-height: 1; } .drink b { font: 700 20px Georgia, serif; } .drink .taste { color: var(--muted); font-size: 15px; margin: 0; }
+  .drink ul { margin: 0; padding-left: 18px; font-size: 14px; } .drink ol { margin: 0; padding-left: 20px; font-size: 14px; } .drink details summary { cursor: pointer; font-weight: 700; color: var(--teal); }
+  #src, .fine { color: var(--muted); font-size: 14px; } .fav { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); } .fav span { flex: 1; } .empty { color: var(--muted); } .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Mocktail <span>Matcher</span> &#127865;</h1>
+  <p class="sub">Describe the flavor or the occasion. Find alcohol-free drinks that fit, with simple recipes.</p>
+  <p id="status">Checking drink matching...</p>
+  <section class="panel">
+    <h2>What do you feel like?</h2>
+    <input id="mood" placeholder="e.g. fruity and fizzy for a summer party" maxlength="300" autocomplete="off" aria-label="Flavor or occasion">
+    <div class="chips" id="chips"></div>
+    <div class="row"><input id="avoid" placeholder="Leave out (optional): e.g. coconut, milk" maxlength="200" autocomplete="off" aria-label="Ingredients to leave out"><button id="go">Find drinks</button></div>
+    <p class="note" id="note"></p>
+  </section>
+  <section id="results" class="hidden"><p id="src" aria-live="polite"></p><div class="drinks" id="list"></div>
+    <p class="fine">Every drink here is alcohol-free. If you have an allergy, check each ingredient's label.</p></section>
+  <section class="panel" style="margin-top:16px"><h2>❤️ My favorite drinks</h2><div id="favs"></div></section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const PICKS = ["fruity and fizzy", "cozy and warm for winter", "tropical beach vibes", "fancy for a party", "not too sweet", "kids' party", "refreshing after sports", "creamy dessert drink"];
+let drinks = [], busy = false, ai = { ready: false, message: "Loading...", percent: null, error: null };
+let favs = []; try { favs = JSON.parse(localStorage.getItem("mocktailFavs") || "[]"); } catch {}
+const persist = () => { try { localStorage.setItem("mocktailFavs", JSON.stringify(favs)); } catch {} };
+PICKS.forEach((p) => { const b = document.createElement("button"); b.textContent = p; b.addEventListener("click", () => { $("mood").value = p; find(); }); $("chips").append(b); });
+const avoidWords = () => $("avoid").value.toLowerCase().split(/[,;]/).map((x) => x.trim().replace(/s$/, "")).filter((x) => x.length > 1);
+const allowed = (d) => !avoidWords().some((a) => (d.name + " " + d.ingredients.join(" ")).toLowerCase().includes(a));
+
+function card(i, top) {
+  const d = drinks[i], c = document.createElement("div"); c.className = "drink" + (top ? " top" : ""); const e = document.createElement("span"); e.className = "e"; e.textContent = d.emoji; const b = document.createElement("b"); b.textContent = d.name; const t = document.createElement("p"); t.className = "taste"; t.textContent = d.taste;
+  const ing = document.createElement("ul"); d.ingredients.forEach((x) => { const li = document.createElement("li"); li.textContent = x; ing.append(li); });
+  const det = document.createElement("details"); if (top) det.open = true; const sm = document.createElement("summary"); sm.textContent = "How to make it"; const ol = document.createElement("ol"); d.steps.forEach((s) => { const li = document.createElement("li"); li.textContent = s; ol.append(li); }); det.append(sm, ol);
+  const f = document.createElement("button"); f.className = "ghost"; f.textContent = favs.includes(d.name) ? "\u2764\ufe0f Saved" : "\u2661 Save"; f.addEventListener("click", () => { favs = favs.includes(d.name) ? favs.filter((x) => x !== d.name) : [...favs, d.name]; persist(); drawFavs(); f.textContent = favs.includes(d.name) ? "\u2764\ufe0f Saved" : "\u2661 Save"; });
+  c.append(e, b, t, ing, det, f); return c;
+}
+function show(idx, label) { $("results").classList.remove("hidden"); $("src").textContent = label; const box = $("list"); box.innerHTML = ""; idx.forEach((i, k) => box.append(card(i, k === 0))); if (!idx.length) box.innerHTML = '<p class="empty">No drinks match. Try leaving out fewer ingredients or different words.</p>'; }
+function keywordMatch(t) {
+  const ws = t.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3 && !["drink", "drinks", "something", "want", "like", "with", "really", "feel"].includes(w));
+  return drinks.map((d, i) => ({ i, d, s: ws.filter((w) => (d.name + " " + d.taste).toLowerCase().split(/[^a-z]+/).some((x) => x === w || (w.length > 4 && x.startsWith(w.slice(0, 5))))).length })).filter((x) => x.s > 0 && allowed(x.d)).sort((a, b) => b.s - a.s).slice(0, 5).map((x) => x.i);
+}
+async function find() {
+  if (busy) return; const mood = $("mood").value.trim(); if (!mood) { $("note").textContent = "Describe what you feel like first, or tap an example."; return $("mood").focus(); }
+  if (!drinks.length) { $("note").textContent = "The drink list hasn't loaded. Is the server running?"; return; }
+  busy = true; $("go").classList.add("busy"); $("note").textContent = ai.ready ? "Mixing ideas..." : "";
+  try { if (!ai.ready) throw new Error("not ready");
+    const res = await fetch("/api/match", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mood, avoid: $("avoid").value }) }); const r = await res.json(); if (!res.ok) throw new Error(r.error);
+    show(r, "Best matches by meaning" + (avoidWords().length ? " (leaving out: " + avoidWords().join(", ") + ")" : "")); $("note").textContent = "";
+  } catch { show(keywordMatch(mood), "Matches by keywords"); $("note").textContent = ai.ready ? "" : "The AI is still loading, so this matched keywords. Try again soon for smarter matches."; }
+  busy = false; $("go").classList.remove("busy");
+}
+$("go").addEventListener("click", find); ["mood", "avoid"].forEach((id) => $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") find(); }));
+function drawFavs() { const box = $("favs"); box.innerHTML = favs.length ? "" : '<p class="empty">Save drinks you want to make again.</p>';
+  favs.forEach((n) => { const d = drinks.find((x) => x.name === n); const r = document.createElement("div"); r.className = "fav"; const s = document.createElement("span"); s.textContent = (d ? d.emoji + " " : "") + n;
+    const o = document.createElement("button"); o.className = "ghost"; o.textContent = "Recipe"; o.addEventListener("click", () => { const i = drinks.findIndex((x) => x.name === n); if (i >= 0) show([i], "From your favorites:"); $("results").scrollIntoView({ behavior: "smooth" }); });
+    const x = document.createElement("button"); x.className = "ghost"; x.textContent = "Remove"; x.addEventListener("click", () => { favs = favs.filter((k) => k !== n); persist(); drawFavs(); }); r.append(s, o, x); box.append(r); }); }
+
+async function checkStatus() {
+  try { ai = await (await fetch("/api/status")).json();
+    if (ai.error) return setStatus("Matching error: " + ai.error + ". Keyword matching still works.", "err");
+    if (ai.ready) return setStatus("Drink matching ready. It runs on your device.", "ok");
+    setStatus(ai.message + (ai.percent != null ? " " + ai.percent + "%" : "") + " Keyword matching works meanwhile.");
+  } catch { ai = { ready: false, error: "the server can't be reached" }; setStatus("Can't reach the server. Open http://localhost:3076 and make sure npm start is running.", "err"); return; }
+  setTimeout(checkStatus, 1500);
+}
+function setStatus(t, c = "") { $("status").textContent = t; $("status").className = c; }
+fetch("/api/drinks").then((r) => r.json()).then((d) => { drinks = d; drawFavs(); }).catch(() => ($("note").textContent = "Couldn't load the drink list. Is the server running?"));
+checkStatus();
+</script>
+</body>
+</html>
